@@ -23,7 +23,7 @@ jobs:
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org.drinkless.tdlib/org.mommy.messenger/g' {} +
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org_drinkless_tdlib/org_mommy_messenger/g' {} +
 
-      - name: 🛠️ 自动化构建 (Docker 模式 - 路径深度对齐)
+      - name: 🛠️ 自动化构建 (Docker 模式 - 避开路径 Size 检查)
         run: |
           git clone https://github.com/KDAB/android_openssl.git ../android_openssl
           
@@ -33,29 +33,32 @@ jobs:
           apt-get update && apt-get install -y cmake gperf php-cli ninja-build clang git libssl-dev zlib1g-dev openjdk-11-jdk
           export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
           
-          # 1. 第一阶段：编译并运行生成器
+          # 1. 第一阶段：编译生成器
           mkdir -p build_local && cd build_local
           cmake -G Ninja -DTD_ENABLE_JNI=ON ..
           ninja td_generate_java_api
           
-          # 强制生成所有 API 文件
-          mkdir -p auto/td/telegram auto/td/mtproto
-          ./td/generate/td_generate_java_api ../td/telegram/td_api.tl auto/td/telegram/ ../td/mtproto/mtproto_api.tl auto/td/mtproto/
+          # 【彻底修复 Wrong Size 报错】
+          # 不要预先创建目录！让生成器自己去创建不存在的路径
+          # 我们把输出指向容器内部非挂载路径 /tmp/gen
+          rm -rf /tmp/gen_telegram /tmp/gen_mtproto
+          ./td/generate/td_generate_java_api ../td/telegram/td_api.tl /tmp/gen_telegram/ ../td/mtproto/mtproto_api.tl /tmp/gen_mtproto/
           
-          # 生成 MIME
-          mkdir -p auto_utils
-          php ../tdutils/generate/generate_mime_types_gperf.php ../tdutils/generate/mime_types.list auto_utils/mime_type_to_extension.cpp
+          # MIME 生成
+          mkdir -p /tmp/gen_utils
+          php ../tdutils/generate/generate_mime_types_gperf.php ../tdutils/generate/mime_types.list /tmp/gen_utils/mime_type_to_extension.cpp
           cd ..
 
-          # 2. 【深度修复】在 build_android 目录下建立绝对映射
-          # 这样编译器在 -I/work/td/generate/auto 搜索时就能精准命中
-          mkdir -p build_android/td/generate/auto/td/mtproto
-          mkdir -p build_android/td/generate/auto/td/telegram
-          mkdir -p build_android/tdutils/generate/auto
+          # 2. 深度路径对齐 (把生好的东西搬运到 Android 编译器预期的位置)
+          # 创建编译器一定会去找的那个生成路径
+          GEN_DIR="build_android/td/generate/auto"
+          mkdir -p "$GEN_DIR/td/telegram"
+          mkdir -p "$GEN_DIR/td/mtproto"
+          mkdir -p "build_android/tdutils/generate/auto"
 
-          cp -fv build_local/auto/td/mtproto/* build_android/td/generate/auto/td/mtproto/ || true
-          cp -fv build_local/auto/td/telegram/* build_android/td/generate/auto/td/telegram/ || true
-          cp -fv build_local/auto_utils/* build_android/tdutils/generate/auto/ || true
+          cp -fv /tmp/gen_telegram/* "$GEN_DIR/td/telegram/" || true
+          cp -fv /tmp/gen_mtproto/* "$GEN_DIR/td/mtproto/" || true
+          cp -fv /tmp/gen_utils/* "build_android/tdutils/generate/auto/" || true
 
           # 3. 第二阶段：Android 交叉编译
           cd build_android
@@ -75,8 +78,8 @@ jobs:
             -DCMAKE_INSTALL_PREFIX:PATH=/td_install \
             ..
           
-          # 防止 CMake 尝试重新生成导致路径覆盖
-          find . -type f -name "*.h" -exec touch {} +
+          # 锁定时间戳，防止 CMake 再次触发那个会报错的生成逻辑
+          find . -type f -exec touch {} +
           ninja -j2 install
           EOF
 
