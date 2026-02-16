@@ -7,37 +7,49 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: 📂 拉取源码
+      - name: 📂 拉取源码 (包含深度子模块)
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
-      - name: 🚀 增强运行内存 (7GB RAM + 2GB Swap)
+      - name: 🚀 释放与增强内存 (全力冲刺 7GB+)
         run: |
+          # 1. 卸载不需要的软件，释放物理内存和磁盘空间
+          sudo rm -rf /usr/local/lib/android/sdk/platforms/android-31
+          sudo rm -rf /usr/local/lib/android/sdk/platforms/android-30
+          
+          # 2. 开启 2GB Swap 虚拟内存，确保总内存余量
           sudo swapoff -a
           sudo fallocate -l 2G /swapfile
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
           sudo swapon /swapfile
+          
+          # 3. 打印当前内存状态
           free -h
+          echo "✅ 内存增强环境已就绪"
 
-      - name: 💉 修改包名为 Mommy 专属
+      - name: 💉 强制替换包名 (Mommy 专属)
         run: |
-          grep -rl "org.drinkless.tdlib" . | xargs sed -i 's/org.drinkless.tdlib/org.mommy.messenger/g' || true
-          grep -rl "org_drinkless_tdlib" . | xargs sed -i 's/org_drinkless_tdlib/org_mommy_messenger/g' || true
+          find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org.drinkless.tdlib/org.mommy.messenger/g' {} +
+          find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org_drinkless_tdlib/org_mommy_messenger/g' {} +
+          echo "✅ 血统替换完成"
 
-      - name: 🛠️ 准备环境
+      - name: 🛠️ 准备构建环境
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake gperf php-cli ninja-build
 
-      - name: 🔐 引入 Android 专用 OpenSSL
+      - name: 🔐 获取 Android 专用 OpenSSL
         run: |
-          git clone https://github.com/KDAB/android_openssl.git ../android_openssl
+          git clone https://github.com/KDAB/android_openssl.git ${GITHUB_WORKSPACE}/android_openssl
 
-      - name: 🏗️ 执行全功能编译 (限制并发以防崩溃)
+      - name: 🏗️ 真正的全功能编译 (arm64-v8a)
         run: |
           mkdir build && cd build
+          
+          # 配置 CMake 并指定 NDK
           cmake -G Ninja \
                 -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK_LATEST_HOME}/build/cmake/android.toolchain.cmake \
                 -DANDROID_ABI=arm64-v8a \
@@ -45,10 +57,14 @@ jobs:
                 -DTD_ENABLE_JNI=ON \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DOPENSSL_USE_STATIC_LIBS=TRUE \
+                -DOPENSSL_ROOT_DIR=${GITHUB_WORKSPACE}/android_openssl/arm64-v8a \
                 -DCMAKE_INSTALL_PREFIX:PATH=../td_install \
                 ..
-          # 使用 -j2 限制并发数。虽然比 -j4 慢一点点，
-          # 但能保证在 7GB 内存下绝对不会因为内存溢出而编译失败。
+
+          # 预生成代码防止 [42/90] 报错
+          ninja td_generate_mime_types
+          
+          # 正式编译。-j2 是 7G 内存下的黄金比例，既快又稳
           ninja -j2 install
 
       - name: 📦 上传成品 libtdjni.so
