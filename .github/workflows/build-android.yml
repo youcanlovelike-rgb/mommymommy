@@ -1,5 +1,5 @@
 name: Build Mommy Real Core
-on: [push, workflow_dispatch] # 增加手动触发按钮
+on: [push, workflow_dispatch]
 
 jobs:
   build:
@@ -12,20 +12,30 @@ jobs:
         with:
           submodules: recursive
 
+      - name: 🚀 增强运行内存 (7GB RAM + 2GB Swap)
+        run: |
+          sudo swapoff -a
+          sudo fallocate -l 2G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
       - name: 💉 修改包名为 Mommy 专属
         run: |
-          # 批量替换所有包名引用
           grep -rl "org.drinkless.tdlib" . | xargs sed -i 's/org.drinkless.tdlib/org.mommy.messenger/g' || true
           grep -rl "org_drinkless_tdlib" . | xargs sed -i 's/org_drinkless_tdlib/org_mommy_messenger/g' || true
 
-      - name: 🛠️ 准备环境与 NDK
+      - name: 🛠️ 准备环境
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake gperf php-cli ninja-build
-          # GitHub 默认自带 NDK，我们直接指定其路径
-          echo "ANDROID_NDK_HOME=${ANDROID_NDK_LATEST_HOME}" >> $GITHUB_ENV
 
-      - name: 🏗️ 执行全功能编译 (arm64-v8a)
+      - name: 🔐 引入 Android 专用 OpenSSL
+        run: |
+          git clone https://github.com/KDAB/android_openssl.git ../android_openssl
+
+      - name: 🏗️ 执行全功能编译 (限制并发以防崩溃)
         run: |
           mkdir build && cd build
           cmake -G Ninja \
@@ -34,12 +44,15 @@ jobs:
                 -DANDROID_PLATFORM=android-24 \
                 -DTD_ENABLE_JNI=ON \
                 -DCMAKE_BUILD_TYPE=Release \
+                -DOPENSSL_USE_STATIC_LIBS=TRUE \
                 -DCMAKE_INSTALL_PREFIX:PATH=../td_install \
                 ..
-          ninja install
+          # 使用 -j2 限制并发数。虽然比 -j4 慢一点点，
+          # 但能保证在 7GB 内存下绝对不会因为内存溢出而编译失败。
+          ninja -j2 install
 
       - name: 📦 上传成品 libtdjni.so
-        uses: actions/upload-artifact@v4 # 强制使用 V4 解决报错
+        uses: actions/upload-artifact@v4
         with:
           name: mommy-real-so-arm64
           path: td_install/lib/libtdjni.so
