@@ -13,7 +13,7 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: 🚀 增强内存
+      - name: 🚀 内存护体
         run: |
           sudo swapoff -a
           sudo fallocate -l 2G /swapfile
@@ -21,34 +21,39 @@ jobs:
           sudo mkswap /swapfile
           sudo swapon /swapfile
 
-      - name: 💉 修改包名
+      - name: 🛠️ 准备环境
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake gperf php-cli ninja-build clang
+
+      - name: 💉 包名替换 (Mommy 专属)
         run: |
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org.drinkless.tdlib/org.mommy.messenger/g' {} +
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org_drinkless_tdlib/org_mommy_messenger/g' {} +
 
-      - name: 🛠️ 准备环境
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake gperf php-cli ninja-build
-
-      - name: 🔐 获取并定位 OpenSSL
+      - name: 🔐 准备 OpenSSL
         id: openssl_fix
         run: |
           git clone https://github.com/KDAB/android_openssl.git ../android_openssl
-          # 自动寻找 libcrypto.a 的绝对路径
           CRYPTO_PATH=$(find ${GITHUB_WORKSPACE}/../android_openssl -name "libcrypto.a" | grep "arm64-v8a" | head -n 1)
           SSL_PATH=$(find ${GITHUB_WORKSPACE}/../android_openssl -name "libssl.a" | grep "arm64-v8a" | head -n 1)
           INCLUDE_PATH=$(dirname $(dirname $CRYPTO_PATH))/include
-          
           echo "CRYPTO_LIB=$CRYPTO_PATH" >> $GITHUB_ENV
           echo "SSL_LIB=$SSL_PATH" >> $GITHUB_ENV
           echo "SSL_INC=$INCLUDE_PATH" >> $GITHUB_ENV
-          echo "找到路径: $CRYPTO_PATH"
 
-      - name: 🏗️ 执行全功能编译
+      - name: 🏗️ 关键步骤：本地生成代码
         run: |
-          mkdir -p build && cd build
-          
+          # 1. 先用 Ubuntu 本地编译器生成那些失踪的 .cpp
+          mkdir build_local && cd build_local
+          cmake -G Ninja ..
+          ninja td_generate_mime_types
+          cd ..
+          echo "✅ 动态代码已生成"
+
+      - name: 🏗️ 最终步：Android 交叉编译
+        run: |
+          mkdir build_android && cd build_android
           cmake -G Ninja \
                 -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK_LATEST_HOME}/build/cmake/android.toolchain.cmake \
                 -DANDROID_ABI=arm64-v8a \
@@ -61,8 +66,7 @@ jobs:
                 -DOPENSSL_SSL_LIBRARY=${{ env.SSL_LIB }} \
                 -DCMAKE_INSTALL_PREFIX:PATH=../td_install \
                 ..
-
-          # 直接编译，Ninja 会自动处理所有依赖
+          # 2. 现在文件已经在那了，放心编译
           ninja -j2 install
 
       - name: 📦 上传成品
