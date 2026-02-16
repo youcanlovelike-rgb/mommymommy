@@ -1,4 +1,4 @@
-name: Build Mommy Full Real Core (Docker Mode)
+name: Build Mommy Full Real Core
 on: [push, workflow_dispatch]
 
 jobs:
@@ -10,7 +10,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: 🚀 增强内存与 Swap
+      - name: 🚀 增强内存与 Swap (全功能编译必须)
         run: |
           sudo swapoff -a
           sudo fallocate -l 4G /swapfile
@@ -18,34 +18,37 @@ jobs:
           sudo mkswap /swapfile
           sudo swapon /swapfile
 
-      - name: 💉 包名全局替换
+      - name: 💉 包名全局替换 (Mommy 血统注入)
         run: |
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org.drinkless.tdlib/org.mommy.messenger/g' {} +
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org_drinkless_tdlib/org_mommy_messenger/g' {} +
 
-      - name: 🛠️ 自动化构建 (Docker 环境)
+      - name: 🛠️ 自动化构建 (Docker 强力模式)
         run: |
-          # 准备 OpenSSL 源码 (Docker 内部编译更稳)
+          # 下载 OpenSSL
           git clone https://github.com/KDAB/android_openssl.git ../android_openssl
           
-          # 编写 Docker 编译脚本
+          # 创建 Docker 内部运行的“铁律”脚本
           cat << 'EOF' > build_script.sh
           set -e
-          # 1. 准备环境
-          apt-get update && apt-get install -y cmake gperf php-cli ninja-build clang git
+          export DEBIAN_FRONTEND=noninteractive
           
-          # 2. 锁定 OpenSSL
+          # 1. 极速安装环境
+          apt-get update
+          apt-get install -y cmake gperf php-cli ninja-build clang git libssl-dev zlib1g-dev
+          
+          # 2. 定位 OpenSSL 库 (arm64-v8a)
           CRYPTO_PATH=$(find /android_openssl -name "libcrypto.a" | grep "arm64-v8a" | head -n 1)
           SSL_PATH=$(find /android_openssl -name "libssl.a" | grep "arm64-v8a" | head -n 1)
           SSL_INC=$(dirname $(dirname $CRYPTO_PATH))/include
           
-          # 3. 第一阶段：生成真 API 代码
+          # 3. 第一阶段：真·代码生成 (灵魂注入)
           mkdir -p build_local && cd build_local
           cmake -G Ninja -DTD_ENABLE_JNI=ON ..
           ninja td_generate_java_api
           cd ..
-          
-          # 4. 第二阶段：Android 交叉编译
+
+          # 4. 第二阶段：Android 交叉编译 (收割全功能成品)
           mkdir -p build_android && cd build_android
           cmake -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK_LATEST_HOME}/build/cmake/android.toolchain.cmake \
@@ -58,21 +61,24 @@ jobs:
             -DOPENSSL_SSL_LIBRARY="$SSL_PATH" \
             -DCMAKE_INSTALL_PREFIX:PATH=/td_install \
             ..
+          
+          # 正式起飞 (-j2 稳扎稳打防止溢出)
           ninja -j2 install
           EOF
 
-          # 启动 Docker 运行上述脚本
+          # 启动隔离容器执行
           docker run --rm \
             -v $(pwd):/work \
             -v ${GITHUB_WORKSPACE}/../android_openssl:/android_openssl \
             -v ${ANDROID_NDK_LATEST_HOME}:${ANDROID_NDK_LATEST_HOME} \
             -e ANDROID_NDK_LATEST_HOME=${ANDROID_NDK_LATEST_HOME} \
+            -e DEBIAN_FRONTEND=noninteractive \
             -w /work \
             ubuntu:22.04 /bin/bash build_script.sh
 
-      - name: 📦 上传全功能成品
+      - name: 📦 上传真正的全功能成品
         uses: actions/upload-artifact@v4
         with:
-          name: mommy-docker-full-core
+          name: mommy-full-real-core
           path: td_install/lib/libtdjni.so
 
