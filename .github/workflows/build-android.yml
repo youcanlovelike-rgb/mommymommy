@@ -1,4 +1,4 @@
-name: Build Mommy Real Core
+name: Build Mommy Real Core (Full Features)
 on: [push, workflow_dispatch]
 
 jobs:
@@ -20,8 +20,9 @@ jobs:
           sudo mkswap /swapfile
           sudo swapon /swapfile
 
-      - name: 💉 包名全局替换 (Mommy 专属)
+      - name: 💉 包名全局替换 (核心功能对齐)
         run: |
+          # 这一步非常关键，确保 C++ 里的 JNI 导出函数名与你的 Android 包名一致
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org.drinkless.tdlib/org.mommy.messenger/g' {} +
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org_drinkless_tdlib/org_mommy_messenger/g' {} +
 
@@ -30,7 +31,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake gperf php-cli ninja-build clang
 
-      - name: 🔐 锁定 OpenSSL 路径
+      - name: 🔐 锁定 OpenSSL (arm64-v8a)
         run: |
           git clone https://github.com/KDAB/android_openssl.git ../android_openssl
           CRYPTO_PATH=$(find ${GITHUB_WORKSPACE}/../android_openssl -name "libcrypto.a" | grep "arm64-v8a" | head -n 1)
@@ -39,49 +40,53 @@ jobs:
           echo "SSL_LIB=$SSL_PATH" >> $GITHUB_ENV
           echo "SSL_INC=$(dirname $(dirname $CRYPTO_PATH))/include" >> $GITHUB_ENV
 
-      - name: 🏗️ 物理补丁：手动补全所有生成文件 (解决 35, 115, 116 报错)
+      - name: 🏗️ 第一阶段：真代码生成 (灵魂注入)
         run: |
-          # 1. 修复 tdutils (35/592)
-          mkdir -p tdutils/generate/auto
-          echo 'namespace td { const char *get_mime_type_to_extension(const char *mime_type) { return 0; } const char *get_extension_to_mime_type(const char *extension) { return 0; } }' > tdutils/generate/auto/mime_type_to_extension.cpp
-          echo 'namespace td { const char *get_mime_type_to_extension(const char *mime_type); const char *get_extension_to_mime_type(const char *extension); }' > tdutils/generate/auto/mime_type_to_extension.h
-          cp tdutils/generate/auto/mime_type_to_extension.cpp tdutils/generate/auto/extension_to_mime_type.cpp
+          mkdir -p build_local && cd build_local
+          # 本地模式编译生成器
+          cmake -G Ninja -DTD_ENABLE_JNI=OFF ..
+          # 生成 API 协议代码 (对应 115 报错)
+          ninja td_api_generate_cpp
+          # 生成 MIME 和 MTProto 协议代码 (对应 129 报错)
+          ninja td_generate_mime_types
+          # 强制触发生成所有辅助头文件
+          cmake --build . --target tdmtproto --parallel 4 || echo "Continue..."
+          cd ..
+          
+          # 物理搬运生成的真文件到源码目录
+          mkdir -p td/generate/auto/td/telegram td/generate/auto/td/mtproto tdutils/generate/auto
+          cp -rv build_local/td/generate/auto/* td/generate/auto/ || true
+          cp -rv build_local/tdutils/generate/auto/* tdutils/generate/auto/ || true
+          
+          # 校验：如果没有生成真文件，直接在这里报错停止，不浪费后续时间
+          ls -l td/generate/auto/td/telegram/td_api_0.cpp
 
-          # 2. 修复 API 定义文件 (解决 115/592 关键报错)
-          # 一口气伪造 101 个 API 源文件，确保编译不中断
-          mkdir -p td/generate/auto/td/telegram
-          for i in {0..100}; do
-            echo 'namespace td { namespace td_api { } }' > "td/generate/auto/td/telegram/td_api_$i.cpp"
-          done
-          # 补充必要的空头文件
-          echo '#pragma once' > td/generate/auto/td/telegram/td_api.h
-          echo '#pragma once' > td/generate/auto/td/telegram/td_api.inner.h
-
-          # 3. 修复 SQLite (116/592)
-          mkdir -p sqlite/generate
-          echo '/* dummy */' > sqlite/generate/dummy.c
-          touch sqlite/generate/sqlite3.h
-
-          # 4. 锁定时间戳并强制目录存在
-          mkdir -p td/telegram/auto
-          find . -type f -exec touch {} +
-          echo "✅ 所有物理补丁已植入，准备跨越 115/592 关卡"
-
-      - name: 🏗️ 最终步：Android 交叉编译
+      - name: 🏗️ 第二阶段：Android 交叉编译 (收割全功能成品)
         env:
           INC: ${{ env.SSL_INC }}
           CRYPTO: ${{ env.CRYPTO_LIB }}
           SSL: ${{ env.SSL_LIB }}
         run: |
           mkdir -p build_android && cd build_android
-          cmake -G Ninja -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK_LATEST_HOME}/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-24 -DTD_ENABLE_JNI=ON -DCMAKE_BUILD_TYPE=Release -DOPENSSL_USE_STATIC_LIBS=TRUE -DOPENSSL_INCLUDE_DIR="$INC" -DOPENSSL_CRYPTO_LIBRARY="$CRYPTO" -DOPENSSL_SSL_LIBRARY="$SSL" -DCMAKE_INSTALL_PREFIX:PATH=../td_install ..
+          cmake -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK_LATEST_HOME}/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-24 \
+            -DTD_ENABLE_JNI=ON \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DOPENSSL_USE_STATIC_LIBS=TRUE \
+            -DOPENSSL_INCLUDE_DIR="$INC" \
+            -DOPENSSL_CRYPTO_LIBRARY="$CRYPTO" \
+            -DOPENSSL_SSL_LIBRARY="$SSL" \
+            -DCMAKE_INSTALL_PREFIX:PATH=../td_install \
+            ..
           
-          # 使用 -j2 慢速通过，确保稳定
+          # 使用 -j2 慢速通过链接阶段，防止内存溢出
           ninja -j2 install
 
-      - name: 📦 上传成品 libtdjni.so
+      - name: 📦 上传全功能 libtdjni.so
         uses: actions/upload-artifact@v4
         with:
-          name: mommy-real-so-arm64
+          name: mommy-full-core-arm64
           path: td_install/lib/libtdjni.so
 
