@@ -1,0 +1,37 @@
+name: Build Mommy Real Core
+on: [push]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: 💉 修改血统 (替换为你的包名)
+        run: |
+          grep -rl "org.drinkless.tdlib" . | xargs sed -i 's/org.drinkless.tdlib/org.mommy.messenger/g'
+          grep -rl "org_drinkless_tdlib" . | xargs sed -i 's/org_drinkless_tdlib/org_mommy_messenger/g'
+
+      - name: 🛠️ 安装 NDK 和工具链
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake gperf php-cli
+          # 自动下载配置 NDK 会由 GitHub 默认环境处理
+
+      - name: 🏗️ 真正的全功能编译
+        run: |
+          mkdir build && cd build
+          cmake -DCMAKE_BUILD_TYPE=Release \
+                -DANDROID_ABI=arm64-v8a \
+                -DANDROID_PLATFORM=android-24 \
+                -DTD_ENABLE_JNI=ON ..
+          cmake --build . --target install -- -j$(nproc)
+
+      - name: 📦 上传成品 libtdjni.so
+        uses: actions/upload-artifact@v3
+        with:
+          name: mommy-real-so
+          path: td_install/lib/libtdjni.so
+
