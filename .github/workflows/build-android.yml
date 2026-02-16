@@ -12,7 +12,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: 🚀 增强内存与 Swap (全功能编译需要极大内存)
+      - name: 🚀 增强内存与 Swap
         run: |
           sudo swapoff -a
           sudo fallocate -l 4G /swapfile
@@ -20,7 +20,7 @@ jobs:
           sudo mkswap /swapfile
           sudo swapon /swapfile
 
-      - name: 💉 包名全局替换 (确保 JNI 签名唯一)
+      - name: 💉 包名全局替换 (Mommy 专属)
         run: |
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org.drinkless.tdlib/org.mommy.messenger/g' {} +
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org_drinkless_tdlib/org_mommy_messenger/g' {} +
@@ -30,7 +30,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake gperf php-cli ninja-build clang
 
-      - name: 🔐 锁定 OpenSSL (全功能连接必须)
+      - name: 🔐 锁定 OpenSSL (arm64-v8a)
         run: |
           git clone https://github.com/KDAB/android_openssl.git ../android_openssl
           CRYPTO_PATH=$(find ${GITHUB_WORKSPACE}/../android_openssl -name "libcrypto.a" | grep "arm64-v8a" | head -n 1)
@@ -39,60 +39,53 @@ jobs:
           echo "SSL_LIB=$SSL_PATH" >> $GITHUB_ENV
           echo "SSL_INC=$(dirname $(dirname $CRYPTO_PATH))/include" >> $GITHUB_ENV
 
-      - name: 🏗️ 核心突破：全量 API 灵魂注入
+      - name: 🏗️ 第一阶段：生成真 API 代码 (灵魂注入)
         run: |
-          # 1. 强制在源码目录创建所有预期的路径
-          mkdir -p td/generate/auto/td/telegram
-          mkdir -p td/generate/auto/td/mtproto
-          mkdir -p tdutils/generate/auto
-
-          # 2. 本地轻量化生成（只为了拿到那 100 多个 .cpp 文件）
           mkdir -p build_local && cd build_local
           cmake -G Ninja -DTD_ENABLE_JNI=ON ..
-          # 这一步会真正生成真正的 td_api_x.cpp
-          ninja td_api_generate_cpp || echo "Ignore link errors"
+          # 这一步必须跑通，它是产生真代码的唯一源头
+          ninja td_api_generate_cpp td_generate_mime_types || echo "Gen partial"
           cd ..
 
-          # 3. 物理搬运（使用绝对路径，确保文件到位）
-          # 我们把生成器吐出来的所有真代码，全部强行塞进 Android 编译器必经的路径
-          cp -f build_local/td/generate/auto/td/telegram/td_api_* td/generate/auto/td/telegram/ || true
-          cp -f build_local/td/generate/auto/td/telegram/td_api.h td/generate/auto/td/telegram/ || true
-          cp -f build_local/td/generate/auto/td/mtproto/mtproto_api.* td/generate/auto/td/mtproto/ || true
-          cp -f build_local/tdutils/generate/auto/mime_type_to_extension.* tdutils/generate/auto/ || true
+          # 核心修复：清理旧目录并使用强力搬运
+          rm -rf tdutils/generate/auto td/generate/auto
+          mkdir -p tdutils/generate/auto td/generate/auto/td/telegram td/generate/auto/td/mtproto
+          
+          # 物理搬运：抓取所有真代码
+          find build_local/td/generate/auto/ -name "*.cpp" -o -name "*.h" | xargs -I {} cp -v {} td/generate/auto/td/telegram/ || true
+          find build_local/tdutils/generate/auto/ -name "*.cpp" -o -name "*.h" | xargs -I {} cp -v {} tdutils/generate/auto/ || true
+          
+          # 补齐 MTProto (解决 129 报错)
+          find build_local/ -name "mtproto_api.*" | xargs -I {} cp -v {} td/generate/auto/td/mtproto/ || true
 
-          # 4. 【关键步骤】欺骗 CMake，让它以为已经生成过了
-          # 我们在 build_android 还没创建时，先在源码里留下“已完成”的标记
-          touch td/generate/auto/td/telegram/td_api_0.cpp
-
-      - name: 🏗️ 最终交叉编译 (全功能收割)
+      - name: 🏗️ 第二阶段：全功能 Android 编译
         env:
           INC: ${{ env.SSL_INC }}
           CRYPTO: ${{ env.CRYPTO_LIB }}
           SSL: ${{ env.SSL_LIB }}
         run: |
           mkdir -p build_android && cd build_android
-          # 这里的关键：设置 -DTD_GENERATE_API=OFF，强制不让它去尝试运行生成器
+          # 强制指定生成的代码路径为当前物理路径，防止 clang++ 乱找
           cmake -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK_LATEST_HOME}/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-24 \
             -DTD_ENABLE_JNI=ON \
-            -DTD_GENERATE_API=OFF \
-            -DCMAKE_BUILD_TYPE=Release \
             -DOPENSSL_USE_STATIC_LIBS=TRUE \
             -DOPENSSL_INCLUDE_DIR="$INC" \
             -DOPENSSL_CRYPTO_LIBRARY="$CRYPTO" \
             -DOPENSSL_SSL_LIBRARY="$SSL" \
             -DCMAKE_INSTALL_PREFIX:PATH=../td_install \
+            -DCMAKE_CXX_FLAGS="-I${GITHUB_WORKSPACE}/tdutils/generate/auto -I${GITHUB_WORKSPACE}/td/generate/auto" \
             ..
           
-          # 物理同步时间戳，防止 Ninja 抽风
-          find .. -type f -exec touch {} +
+          # 锁定时间戳：告诉 Ninja 所有手动搬运的文件都是“最新的”
+          find ${GITHUB_WORKSPACE} -type f -exec touch {} +
           
-          # 正式全量编译
+          # 启动！
           ninja -j2 install
 
-      - name: 📦 上传成品 libtdjni.so
+      - name: 📦 上传全功能 libtdjni.so
         uses: actions/upload-artifact@v4
         with:
           name: mommy-full-real-core
