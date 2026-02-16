@@ -39,44 +39,40 @@ jobs:
           echo "SSL_LIB=$SSL_PATH" >> $GITHUB_ENV
           echo "SSL_INC=$(dirname $(dirname $CRYPTO_PATH))/include" >> $GITHUB_ENV
 
-      - name: 🏗️ 第一阶段：真代码生成 (灵魂注入)
+      - name: 🏗️ 第一阶段：灵魂注入 (全自动生成)
         run: |
-          # 1. 在本地环境跑生成器
           mkdir -p build_local && cd build_local
-          cmake -G Ninja -DTD_ENABLE_JNI=OFF ..
-          ninja td_api_generate_cpp td_generate_mime_types
+          # 开启 JNI 以确保生成器会产生 Java/JNI 相关的 API 代码
+          cmake -G Ninja -DTD_ENABLE_JNI=ON -DCMAKE_BUILD_TYPE=Release ..
+          
+          # 尝试多种可能的目标名称，确保生成器运行
+          # 我们只需要生成文件，所以如果最后链接失败也没关系
+          ninja td_api || ninja td_generate_java_api || echo "Generated files should be ready"
           cd ..
           
-          # 2. 关键：物理同步生成的代码到源码树
-          # 编译器报错找不到 /td/generate/auto/... 我们就手动把它建出来
+          # 物理同步：强制创建目录并搬运
           mkdir -p td/generate/auto/td/telegram
           mkdir -p td/generate/auto/td/mtproto
           mkdir -p tdutils/generate/auto
           
-          # 将 build_local 里的真文件强行覆盖到源码对应位置
-          cp -rv build_local/td/generate/auto/* td/generate/auto/ || true
-          cp -rv build_local/tdutils/generate/auto/* tdutils/generate/auto/ || true
+          # 从 build_local 搬运所有自动生成的 .cpp 和 .h
+          # 使用 find 确保我们抓住了所有藏在 build 目录里的生成文件
+          find build_local/td/generate/auto/ -name "*.cpp" -o -name "*.h" | xargs -I {} cp -v {} td/generate/auto/td/telegram/ || true
+          find build_local/tdutils/generate/auto/ -name "*.cpp" -o -name "*.h" | xargs -I {} cp -v {} tdutils/generate/auto/ || true
           
-          # 3. 预造 mtproto_api.h (解决 129 报错)
-          # 由于本地编译可能不全，我们确保至少有一个真实的头文件占位
-          if [ ! -f "td/generate/auto/td/mtproto/mtproto_api.h" ]; then
-             echo '#pragma once' > td/generate/auto/td/mtproto/mtproto_api.h
-             echo 'namespace td { namespace mtproto_api { } }' > td/generate/auto/td/mtproto/mtproto_api.cpp
-          fi
-          
-          # 4. 锁定时间戳
-          find . -type f -exec touch {} +
-          echo "✅ 代码生成并搬运完成"
-          ls -R td/generate/auto/td/telegram/ | head -n 5
+          # 补齐 MTProto 的真灵魂
+          find build_local/ -name "mtproto_api.h" -o -name "mtproto_api.cpp" | xargs -I {} cp -v {} td/generate/auto/td/mtproto/ || true
 
-      - name: 🏗️ 第二阶段：Android 交叉编译 (收割全功能)
+          # 验证
+          ls -l td/generate/auto/td/telegram/td_api_0.cpp || (echo "❌ 关键 API 文件未生成！" && exit 1)
+
+      - name: 🏗️ 第二阶段：Android 交叉编译
         env:
           INC: ${{ env.SSL_INC }}
           CRYPTO: ${{ env.CRYPTO_LIB }}
           SSL: ${{ env.SSL_LIB }}
         run: |
           mkdir -p build_android && cd build_android
-          # 强制关闭内部生成逻辑，使用我们刚刚搬运好的“真文件”
           cmake -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK_LATEST_HOME}/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=arm64-v8a \
@@ -90,10 +86,10 @@ jobs:
             -DCMAKE_INSTALL_PREFIX:PATH=../td_install \
             ..
           
-          # 开始全量编译，使用 j2 保证稳定性
+          # 全量收割
           ninja -j2 install
 
-      - name: 📦 上传成品
+      - name: 📦 上传全功能成品
         uses: actions/upload-artifact@v4
         with:
           name: mommy-full-core-arm64
