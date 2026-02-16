@@ -23,46 +23,40 @@ jobs:
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org.drinkless.tdlib/org.mommy.messenger/g' {} +
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org_drinkless_tdlib/org_mommy_messenger/g' {} +
 
-      - name: 🛠️ 自动化构建 (Docker 模式 - 终极修复)
+      - name: 🛠️ 自动化构建 (Docker 模式 - 强制路径注入)
         run: |
           git clone https://github.com/KDAB/android_openssl.git ../android_openssl
           
           cat << 'EOF' > build_script.sh
           set -e
           export DEBIAN_FRONTEND=noninteractive
-          
-          # 1. 安装环境
-          apt-get update
-          apt-get install -y cmake gperf php-cli ninja-build clang git libssl-dev zlib1g-dev openjdk-11-jdk
+          apt-get update && apt-get install -y cmake gperf php-cli ninja-build clang git libssl-dev zlib1g-dev openjdk-11-jdk
           export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
           
-          # 2. 定位 OpenSSL
-          CRYPTO_PATH=$(find /android_openssl -name "libcrypto.a" | grep "arm64-v8a" | head -n 1)
-          SSL_PATH=$(find /android_openssl -name "libssl.a" | grep "arm64-v8a" | head -n 1)
-          SSL_INC=$(dirname $(dirname $CRYPTO_PATH))/include
-          
-          # 3. 第一阶段：生成代码
+          # 1. 第一阶段：在本地环境生成真代码
           mkdir -p build_local && cd build_local
           cmake -G Ninja -DTD_ENABLE_JNI=ON ..
-          # 只跑这一个，它会自动带起所有需要的 API 生成
           ninja td_generate_java_api
           cd ..
 
-          # 4. 暴力物理同步：把所有生成出来的 .h 和 .cpp 全部强行同步到源码树
-          # 这样 Android 编译器在任何路径下都能找到它们
-          mkdir -p td/generate/auto/td/mtproto
-          mkdir -p td/generate/auto/td/telegram
-          mkdir -p tdutils/generate/auto
+          # 2. 【核心修复】强制物理覆盖到源码树中所有可能的 include 路径
+          # 我们把生成的文件拷贝到 td/ 目录下，因为报错显示它在找 td/mtproto/mtproto_api.h
+          mkdir -p td/mtproto td/telegram tdutils/generate/auto
           
-          # 使用 find 寻找所有生成的文件并拷贝，确保不漏掉 mtproto_api.h
-          find build_local/td/generate/auto/ -name "*.h" -o -name "*.cpp" | xargs -I {} cp -v {} td/generate/auto/td/telegram/ || true
-          # 特别补齐 mtproto 路径
-          find build_local/ -name "mtproto_api.*" | xargs -I {} cp -v {} td/generate/auto/td/mtproto/ || true
-          # 补齐 tdutils 路径
-          find build_local/tdutils/generate/auto/ -name "*.h" -o -name "*.cpp" | xargs -I {} cp -v {} tdutils/generate/auto/ || true
+          # 寻找并拷贝生成的 API 文件
+          cp -fv build_local/td/generate/auto/td/mtproto/mtproto_api.* td/mtproto/ || true
+          cp -fv build_local/td/generate/auto/td/telegram/td_api.* td/telegram/ || true
+          cp -fv build_local/tdutils/generate/auto/* tdutils/generate/auto/ || true
 
-          # 5. 第二阶段：Android 交叉编译
+          # 3. 第二阶段：Android 交叉编译
           mkdir -p build_android && cd build_android
+          
+          # 锁定 OpenSSL
+          CRYPTO_PATH=$(find /android_openssl -name "libcrypto.a" | grep "arm64-v8a" | head -n 1)
+          SSL_PATH=$(find /android_openssl -name "libssl.a" | grep "arm64-v8a" | head -n 1)
+          SSL_INC=$(dirname $(dirname $CRYPTO_PATH))/include
+
+          # 重点：通过 -DCMAKE_CXX_FLAGS 强制指定头文件搜索根目录
           cmake -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK_LATEST_HOME}/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=arm64-v8a \
@@ -73,9 +67,10 @@ jobs:
             -DOPENSSL_CRYPTO_LIBRARY="$CRYPTO_PATH" \
             -DOPENSSL_SSL_LIBRARY="$SSL_PATH" \
             -DCMAKE_INSTALL_PREFIX:PATH=/td_install \
+            -DCMAKE_CXX_FLAGS="-I/work -I/work/td -I/work/td/mtproto" \
             ..
           
-          # 锁定时间戳并全量编译
+          # 物理同步时间戳，防止触发重新生成
           find .. -type f -exec touch {} +
           ninja -j2 install
           EOF
