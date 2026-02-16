@@ -23,7 +23,7 @@ jobs:
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org.drinkless.tdlib/org.mommy.messenger/g' {} +
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org_drinkless_tdlib/org_mommy_messenger/g' {} +
 
-      - name: 🛠️ 自动化构建 (Docker 模式 - 注入空配置文件)
+      - name: 🛠️ 自动化构建 (Docker 模式 - 彻底解决路径冲突)
         run: |
           git clone https://github.com/KDAB/android_openssl.git ../android_openssl
           
@@ -38,29 +38,26 @@ jobs:
           cmake -G Ninja -DTD_ENABLE_JNI=ON ..
           ninja td_generate_java_api
           
-          # 【核心修复：手动注入 config 文件】
-          # TDLib 生成器如果看到输出目录，会试图读取里面的 config 文件
-          mkdir -p /tmp/gen_telegram /tmp/gen_mtproto
-          touch /tmp/gen_telegram/config
-          touch /tmp/gen_mtproto/config
-          
-          # 再次运行生成器
-          ./td/generate/td_generate_java_api ../td/telegram/td_api.tl /tmp/gen_telegram/ ../td/mtproto/mtproto_api.tl /tmp/gen_mtproto/
+          # 【核心修复：毁灭性清理】
+          # 既然它嫌目录不对，我们就彻底删除所有相关目录，让生成器自己建立
+          rm -rf /tmp/gen_td
+          # 运行生成器，指向两个完全不存在的深层子目录
+          ./td/generate/td_generate_java_api ../td/telegram/td_api.tl /tmp/gen_td/telegram/ ../td/mtproto/mtproto_api.tl /tmp/gen_td/mtproto/
           
           # 生成 MIME
-          mkdir -p /tmp/gen_utils
-          php ../tdutils/generate/generate_mime_types_gperf.php ../tdutils/generate/mime_types.list /tmp/gen_utils/mime_type_to_extension.cpp
+          mkdir -p /tmp/gen_td/utils
+          php ../tdutils/generate/generate_mime_types_gperf.php ../tdutils/generate/mime_types.list /tmp/gen_td/utils/mime_type_to_extension.cpp
           cd ..
 
-          # 2. 深度路径对齐
-          GEN_DIR="build_android/td/generate/auto"
-          mkdir -p "$GEN_DIR/td/telegram"
-          mkdir -p "$GEN_DIR/td/mtproto"
+          # 2. 深度路径对齐 (手动构建编译器需要的结构)
+          GEN_BASE="build_android/td/generate/auto/td"
+          mkdir -p "$GEN_BASE/telegram"
+          mkdir -p "$GEN_BASE/mtproto"
           mkdir -p "build_android/tdutils/generate/auto"
 
-          cp -fv /tmp/gen_telegram/* "$GEN_DIR/td/telegram/" || true
-          cp -fv /tmp/gen_mtproto/* "$GEN_DIR/td/mtproto/" || true
-          cp -fv /tmp/gen_utils/* "build_android/tdutils/generate/auto/" || true
+          cp -fv /tmp/gen_td/telegram/* "$GEN_BASE/telegram/" || true
+          cp -fv /tmp/gen_td/mtproto/* "$GEN_BASE/mtproto/" || true
+          cp -fv /tmp/gen_td/utils/* "build_android/tdutils/generate/auto/" || true
 
           # 3. 第二阶段：Android 交叉编译
           cd build_android
@@ -80,6 +77,7 @@ jobs:
             -DCMAKE_INSTALL_PREFIX:PATH=/td_install \
             ..
           
+          # 强制锁定时间戳，绕过 CMake 自带的生成检查
           find . -type f -exec touch {} +
           ninja -j2 install
           EOF
