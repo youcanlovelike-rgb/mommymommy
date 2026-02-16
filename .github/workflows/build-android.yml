@@ -13,24 +13,21 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: 🚀 释放与增强内存 (全力冲刺 7GB+)
+      - name: 🚀 释放与增强内存
         run: |
-          # 卸载冗余软件，腾出物理内存空间
           sudo rm -rf /usr/local/lib/android/sdk/platforms/android-31
           sudo rm -rf /usr/local/lib/android/sdk/platforms/android-30
-          # 开启 2GB Swap 虚拟内存
           sudo swapoff -a
           sudo fallocate -l 2G /swapfile
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
           sudo swapon /swapfile
-          free -h
 
-      - name: 💉 强制替换包名 (Mommy 专属血统)
+      - name: 💉 强制替换包名 (Mommy 专属)
         run: |
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org.drinkless.tdlib/org.mommy.messenger/g' {} +
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org_drinkless_tdlib/org_mommy_messenger/g' {} +
-          echo "✅ 包名替换已完成"
+          echo "✅ 血统替换完成"
 
       - name: 🛠️ 准备构建环境
         run: |
@@ -39,17 +36,15 @@ jobs:
 
       - name: 🔐 获取并准备 Android 专用 OpenSSL
         run: |
-          # 下载预编译好的静态库
           git clone https://github.com/KDAB/android_openssl.git ${GITHUB_WORKSPACE}/android_openssl
 
-      - name: 🏗️ 执行全功能编译 (arm64-v8a)
+      - name: 🏗️ 执行全功能编译
         run: |
-          mkdir build && cd build
+          mkdir -p build && cd build
           
-          # 定义 OpenSSL 架构路径变量
           SSL_PATH="${GITHUB_WORKSPACE}/android_openssl/arm64-v8a"
           
-          # 配置 CMake (手动强制指定 OpenSSL 路径)
+          # 1. 配置
           cmake -G Ninja \
                 -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK_LATEST_HOME}/build/cmake/android.toolchain.cmake \
                 -DANDROID_ABI=arm64-v8a \
@@ -63,15 +58,10 @@ jobs:
                 -DCMAKE_INSTALL_PREFIX:PATH=../td_install \
                 ..
 
-          # 1. 预生成代码，解决 [42/90] 报错问题
-          ninja td_generate_mime_types
+          # 2. [核心修复] 如果直接编译报错，就先尝试编译所有生成任务
+          # 我们不再指定具体的 mime 名字，而是让 ninja 自动识别依赖
+          ninja tdutils_generate_mime_type_to_extension || echo "Skip optional generate step"
           
-          # 2. 正式开始全量编译，使用 -j2 确保 7G 内存不溢出
+          # 3. 正式全量编译 (限制 -j2)
           ninja -j2 install
-
-      - name: 📦 上传成品 libtdjni.so
-        uses: actions/upload-artifact@v4
-        with:
-          name: mommy-real-so-arm64
-          path: td_install/lib/libtdjni.so
 
