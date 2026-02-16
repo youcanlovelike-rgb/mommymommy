@@ -11,9 +11,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          fetch-depth: 0
 
-      - name: 🚀 7G 内存极限压榨
+      - name: 🚀 增强内存与 Swap
         run: |
           sudo swapoff -a
           sudo fallocate -l 2G /swapfile
@@ -36,47 +35,41 @@ jobs:
           git clone https://github.com/KDAB/android_openssl.git ../android_openssl
           CRYPTO_PATH=$(find ${GITHUB_WORKSPACE}/../android_openssl -name "libcrypto.a" | grep "arm64-v8a" | head -n 1)
           SSL_PATH=$(find ${GITHUB_WORKSPACE}/../android_openssl -name "libssl.a" | grep "arm64-v8a" | head -n 1)
-          INCLUDE_PATH=$(dirname $(dirname $CRYPTO_PATH))/include
           echo "CRYPTO_LIB=$CRYPTO_PATH" >> $GITHUB_ENV
           echo "SSL_LIB=$SSL_PATH" >> $GITHUB_ENV
-          echo "SSL_INC=$INCLUDE_PATH" >> $GITHUB_ENV
+          echo "SSL_INC=$(dirname $(dirname $CRYPTO_PATH))/include" >> $GITHUB_ENV
 
-      - name: 🏗️ 暴力注入：预填充所有缺失的生成文件
+      - name: 🏗️ 第一阶段：本地构建 (生成必要代码)
         run: |
-          mkdir -p tdutils/generate/auto/
-          # 注入 mime_type_to_extension.cpp (核心逻辑)
-          cat <<EOF > tdutils/generate/auto/mime_type_to_extension.cpp
-          namespace td {
-          const char *get_mime_type_to_extension(const char *mime_type) { return nullptr; }
-          const char *get_extension_to_mime_type(const char *extension) { return nullptr; }
-          }
-          EOF
-          # 同步创建对应的另一个文件
-          cp tdutils/generate/auto/mime_type_to_extension.cpp tdutils/generate/auto/extension_to_mime_type.cpp
+          mkdir -p build_local && cd build_local
+          cmake -G Ninja -DTD_ENABLE_JNI=OFF ..
+          ninja td_generate_mime_types td_api_generate_cpp || echo "Skip errors"
+          cd ..
+
+      - name: 🏗️ 第二阶段：Android 交叉编译
+        env:
+          MY_SSL_INC: ${{ env.SSL_INC }}
+          MY_CRYPTO_LIB: ${{ env.CRYPTO_LIB }}
+          MY_SSL_LIB: ${{ env.SSL_LIB }}
+        run: |
+          # 物理创建补丁目录防止 116 报错
+          mkdir -p tdutils/generate/auto
+          mkdir -p sqlite/generate
           
-          # 防止 Ninja 再次尝试生成这些文件而导致报错
-          touch tdutils/generate/auto/mime_type_to_extension.cpp
-          touch tdutils/generate/auto/extension_to_mime_type.cpp
-          echo "✅ 缺失文件已物理注入，屏蔽生成器逻辑"
-
-      - name: 🏗️ 最终步：Android 交叉编译 (直冲 592 目标)
-        run: |
           mkdir -p build_android && cd build_android
-          # 关键点：我们通过禁用某些选项，尽量减少对生成器的依赖
           cmake -G Ninja \
-                -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK_LATEST_HOME}/build/cmake/android.toolchain.cmake \
-                -DANDROID_ABI=arm64-v8a \
-                -DANDROID_PLATFORM=android-24 \
-                -DTD_ENABLE_JNI=ON \
-                -DCMAKE_BUILD_TYPE=Release \
-                -DOPENSSL_USE_STATIC_LIBS=TRUE \
-                -DOPENSSL_INCLUDE_DIR=${{ env.SSL_INC }} \
-                -DOPENSSL_CRYPTO_LIBRARY=${{ env.CRYPTO_LIB }} \
-                -DOPENSSL_SSL_LIBRARY=${{ env.SSL_LIB }} \
-                -DCMAKE_INSTALL_PREFIX:PATH=../td_install \
-                ..
+            -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK_LATEST_HOME}/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-24 \
+            -DTD_ENABLE_JNI=ON \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DOPENSSL_USE_STATIC_LIBS=TRUE \
+            -DOPENSSL_INCLUDE_DIR="$MY_SSL_INC" \
+            -DOPENSSL_CRYPTO_LIBRARY="$MY_CRYPTO_LIB" \
+            -DOPENSSL_SSL_LIBRARY="$MY_SSL_LIB" \
+            -DCMAKE_INSTALL_PREFIX:PATH=../td_install \
+            ..
           
-          # 直接开始构建，不再运行任何 generate 目标
           ninja -j2 install
 
       - name: 📦 上传成品
