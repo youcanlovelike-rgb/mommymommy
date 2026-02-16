@@ -20,7 +20,7 @@ jobs:
           sudo mkswap /swapfile
           sudo swapon /swapfile
 
-      - name: 💉 包名全局替换 (Mommy 专属)
+      - name: 💉 包名全局替换
         run: |
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org.drinkless.tdlib/org.mommy.messenger/g' {} +
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org_drinkless_tdlib/org_mommy_messenger/g' {} +
@@ -39,53 +39,60 @@ jobs:
           echo "SSL_LIB=$SSL_PATH" >> $GITHUB_ENV
           echo "SSL_INC=$(dirname $(dirname $CRYPTO_PATH))/include" >> $GITHUB_ENV
 
-      - name: 🏗️ 第一阶段：生成真 API 代码 (灵魂注入)
+      - name: 🏗️ 第一阶段：本地真代码生成 (灵魂提取)
         run: |
           mkdir -p build_local && cd build_local
           cmake -G Ninja -DTD_ENABLE_JNI=ON ..
-          # 这一步必须跑通，它是产生真代码的唯一源头
-          ninja td_api_generate_cpp td_generate_mime_types || echo "Gen partial"
+          # 提取真正的 API 和 MIME 代码
+          ninja td_api_generate_cpp td_generate_mime_types || echo "Partial OK"
           cd ..
 
-          # 核心修复：清理旧目录并使用强力搬运
-          rm -rf tdutils/generate/auto td/generate/auto
-          mkdir -p tdutils/generate/auto td/generate/auto/td/telegram td/generate/auto/td/mtproto
-          
-          # 物理搬运：抓取所有真代码
-          find build_local/td/generate/auto/ -name "*.cpp" -o -name "*.h" | xargs -I {} cp -v {} td/generate/auto/td/telegram/ || true
-          find build_local/tdutils/generate/auto/ -name "*.cpp" -o -name "*.h" | xargs -I {} cp -v {} tdutils/generate/auto/ || true
-          
-          # 补齐 MTProto (解决 129 报错)
-          find build_local/ -name "mtproto_api.*" | xargs -I {} cp -v {} td/generate/auto/td/mtproto/ || true
-
-      - name: 🏗️ 第二阶段：全功能 Android 编译
+      - name: 🏗️ 第二阶段：物理挂载与 Android 编译
         env:
           INC: ${{ env.SSL_INC }}
           CRYPTO: ${{ env.CRYPTO_LIB }}
           SSL: ${{ env.SSL_LIB }}
         run: |
-          mkdir -p build_android && cd build_android
-          # 强制指定生成的代码路径为当前物理路径，防止 clang++ 乱找
+          # 1. 创建 Android 编译目录
+          mkdir -p build_android
+          
+          # 2. 【核心大招】建立绝对路径软链接
+          # 既然编译器在 /build_android/tdutils/generate/auto 找，我们就把真的地方链接过去
+          mkdir -p build_android/tdutils/generate/auto
+          mkdir -p build_android/td/generate/auto/td/telegram
+          mkdir -p build_android/td/generate/auto/td/mtproto
+          
+          # 强制链接所有生成的真文件到 Android 编译树中
+          cp -rv build_local/tdutils/generate/auto/* build_android/tdutils/generate/auto/ || true
+          cp -rv build_local/td/generate/auto/* build_android/td/generate/auto/ || true
+          
+          # 同时也给源码目录塞一份，双保险
+          mkdir -p tdutils/generate/auto td/generate/auto/td/telegram
+          cp -rv build_local/tdutils/generate/auto/* tdutils/generate/auto/ || true
+          cp -rv build_local/td/generate/auto/* td/generate/auto/ || true
+
+          # 3. 开始 Android 交叉编译
+          cd build_android
           cmake -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK_LATEST_HOME}/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-24 \
             -DTD_ENABLE_JNI=ON \
+            -DCMAKE_BUILD_TYPE=Release \
             -DOPENSSL_USE_STATIC_LIBS=TRUE \
             -DOPENSSL_INCLUDE_DIR="$INC" \
             -DOPENSSL_CRYPTO_LIBRARY="$CRYPTO" \
             -DOPENSSL_SSL_LIBRARY="$SSL" \
             -DCMAKE_INSTALL_PREFIX:PATH=../td_install \
-            -DCMAKE_CXX_FLAGS="-I${GITHUB_WORKSPACE}/tdutils/generate/auto -I${GITHUB_WORKSPACE}/td/generate/auto" \
             ..
           
-          # 锁定时间戳：告诉 Ninja 所有手动搬运的文件都是“最新的”
-          find ${GITHUB_WORKSPACE} -type f -exec touch {} +
+          # 锁定所有文件时间戳，防止触发重生成
+          find .. -type f -exec touch {} +
           
-          # 启动！
+          # 冲锋
           ninja -j2 install
 
-      - name: 📦 上传全功能 libtdjni.so
+      - name: 📦 上传全功能成品
         uses: actions/upload-artifact@v4
         with:
           name: mommy-full-real-core
