@@ -23,7 +23,7 @@ jobs:
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org.drinkless.tdlib/org.mommy.messenger/g' {} +
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org_drinkless_tdlib/org_mommy_messenger/g' {} +
 
-      - name: 🛠️ 自动化构建 (Docker 模式 - 避开路径 Size 检查)
+      - name: 🛠️ 自动化构建 (Docker 模式 - 注入空配置文件)
         run: |
           git clone https://github.com/KDAB/android_openssl.git ../android_openssl
           
@@ -38,19 +38,21 @@ jobs:
           cmake -G Ninja -DTD_ENABLE_JNI=ON ..
           ninja td_generate_java_api
           
-          # 【彻底修复 Wrong Size 报错】
-          # 不要预先创建目录！让生成器自己去创建不存在的路径
-          # 我们把输出指向容器内部非挂载路径 /tmp/gen
-          rm -rf /tmp/gen_telegram /tmp/gen_mtproto
+          # 【核心修复：手动注入 config 文件】
+          # TDLib 生成器如果看到输出目录，会试图读取里面的 config 文件
+          mkdir -p /tmp/gen_telegram /tmp/gen_mtproto
+          touch /tmp/gen_telegram/config
+          touch /tmp/gen_mtproto/config
+          
+          # 再次运行生成器
           ./td/generate/td_generate_java_api ../td/telegram/td_api.tl /tmp/gen_telegram/ ../td/mtproto/mtproto_api.tl /tmp/gen_mtproto/
           
-          # MIME 生成
+          # 生成 MIME
           mkdir -p /tmp/gen_utils
           php ../tdutils/generate/generate_mime_types_gperf.php ../tdutils/generate/mime_types.list /tmp/gen_utils/mime_type_to_extension.cpp
           cd ..
 
-          # 2. 深度路径对齐 (把生好的东西搬运到 Android 编译器预期的位置)
-          # 创建编译器一定会去找的那个生成路径
+          # 2. 深度路径对齐
           GEN_DIR="build_android/td/generate/auto"
           mkdir -p "$GEN_DIR/td/telegram"
           mkdir -p "$GEN_DIR/td/mtproto"
@@ -78,7 +80,6 @@ jobs:
             -DCMAKE_INSTALL_PREFIX:PATH=/td_install \
             ..
           
-          # 锁定时间戳，防止 CMake 再次触发那个会报错的生成逻辑
           find . -type f -exec touch {} +
           ninja -j2 install
           EOF
