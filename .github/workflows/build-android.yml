@@ -7,44 +7,48 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: 📂 拉取源码 (包含深度子模块)
+      - name: 📂 拉取源码
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      - name: 🚀 释放与增强内存
+      - name: 🚀 增强内存
         run: |
-          sudo rm -rf /usr/local/lib/android/sdk/platforms/android-31
-          sudo rm -rf /usr/local/lib/android/sdk/platforms/android-30
           sudo swapoff -a
           sudo fallocate -l 2G /swapfile
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
           sudo swapon /swapfile
 
-      - name: 💉 强制替换包名 (Mommy 专属)
+      - name: 💉 修改包名
         run: |
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org.drinkless.tdlib/org.mommy.messenger/g' {} +
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org_drinkless_tdlib/org_mommy_messenger/g' {} +
-          echo "✅ 血统替换完成"
 
-      - name: 🛠️ 准备构建环境
+      - name: 🛠️ 准备环境
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake gperf php-cli ninja-build
 
-      - name: 🔐 获取并准备 Android 专用 OpenSSL
+      - name: 🔐 获取并定位 OpenSSL
+        id: openssl_fix
         run: |
-          git clone https://github.com/KDAB/android_openssl.git ${GITHUB_WORKSPACE}/android_openssl
+          git clone https://github.com/KDAB/android_openssl.git ../android_openssl
+          # 自动寻找 libcrypto.a 的绝对路径
+          CRYPTO_PATH=$(find ${GITHUB_WORKSPACE}/../android_openssl -name "libcrypto.a" | grep "arm64-v8a" | head -n 1)
+          SSL_PATH=$(find ${GITHUB_WORKSPACE}/../android_openssl -name "libssl.a" | grep "arm64-v8a" | head -n 1)
+          INCLUDE_PATH=$(dirname $(dirname $CRYPTO_PATH))/include
+          
+          echo "CRYPTO_LIB=$CRYPTO_PATH" >> $GITHUB_ENV
+          echo "SSL_LIB=$SSL_PATH" >> $GITHUB_ENV
+          echo "SSL_INC=$INCLUDE_PATH" >> $GITHUB_ENV
+          echo "找到路径: $CRYPTO_PATH"
 
       - name: 🏗️ 执行全功能编译
         run: |
           mkdir -p build && cd build
           
-          SSL_PATH="${GITHUB_WORKSPACE}/android_openssl/arm64-v8a"
-          
-          # 1. 配置
           cmake -G Ninja \
                 -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK_LATEST_HOME}/build/cmake/android.toolchain.cmake \
                 -DANDROID_ABI=arm64-v8a \
@@ -52,16 +56,18 @@ jobs:
                 -DTD_ENABLE_JNI=ON \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DOPENSSL_USE_STATIC_LIBS=TRUE \
-                -DOPENSSL_INCLUDE_DIR=${SSL_PATH}/include \
-                -DOPENSSL_CRYPTO_LIBRARY=${SSL_PATH}/lib/libcrypto.a \
-                -DOPENSSL_SSL_LIBRARY=${SSL_PATH}/lib/libssl.a \
+                -DOPENSSL_INCLUDE_DIR=${{ env.SSL_INC }} \
+                -DOPENSSL_CRYPTO_LIBRARY=${{ env.CRYPTO_LIB }} \
+                -DOPENSSL_SSL_LIBRARY=${{ env.SSL_LIB }} \
                 -DCMAKE_INSTALL_PREFIX:PATH=../td_install \
                 ..
 
-          # 2. [核心修复] 如果直接编译报错，就先尝试编译所有生成任务
-          # 我们不再指定具体的 mime 名字，而是让 ninja 自动识别依赖
-          ninja tdutils_generate_mime_type_to_extension || echo "Skip optional generate step"
-          
-          # 3. 正式全量编译 (限制 -j2)
+          # 直接编译，Ninja 会自动处理所有依赖
           ninja -j2 install
+
+      - name: 📦 上传成品
+        uses: actions/upload-artifact@v4
+        with:
+          name: mommy-real-so-arm64
+          path: td_install/lib/libtdjni.so
 
