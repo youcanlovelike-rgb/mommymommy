@@ -15,41 +15,41 @@ jobs:
 
       - name: 🚀 释放与增强内存 (全力冲刺 7GB+)
         run: |
-          # 1. 卸载不需要的软件，释放物理内存和磁盘空间
+          # 卸载冗余软件，腾出物理内存空间
           sudo rm -rf /usr/local/lib/android/sdk/platforms/android-31
           sudo rm -rf /usr/local/lib/android/sdk/platforms/android-30
-          
-          # 2. 开启 2GB Swap 虚拟内存，确保总内存余量
+          # 开启 2GB Swap 虚拟内存
           sudo swapoff -a
           sudo fallocate -l 2G /swapfile
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
           sudo swapon /swapfile
-          
-          # 3. 打印当前内存状态
           free -h
-          echo "✅ 内存增强环境已就绪"
 
-      - name: 💉 强制替换包名 (Mommy 专属)
+      - name: 💉 强制替换包名 (Mommy 专属血统)
         run: |
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org.drinkless.tdlib/org.mommy.messenger/g' {} +
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org_drinkless_tdlib/org_mommy_messenger/g' {} +
-          echo "✅ 血统替换完成"
+          echo "✅ 包名替换已完成"
 
       - name: 🛠️ 准备构建环境
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake gperf php-cli ninja-build
 
-      - name: 🔐 获取 Android 专用 OpenSSL
+      - name: 🔐 获取并准备 Android 专用 OpenSSL
         run: |
+          # 下载预编译好的静态库
           git clone https://github.com/KDAB/android_openssl.git ${GITHUB_WORKSPACE}/android_openssl
 
-      - name: 🏗️ 真正的全功能编译 (arm64-v8a)
+      - name: 🏗️ 执行全功能编译 (arm64-v8a)
         run: |
           mkdir build && cd build
           
-          # 配置 CMake 并指定 NDK
+          # 定义 OpenSSL 架构路径变量
+          SSL_PATH="${GITHUB_WORKSPACE}/android_openssl/arm64-v8a"
+          
+          # 配置 CMake (手动强制指定 OpenSSL 路径)
           cmake -G Ninja \
                 -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK_LATEST_HOME}/build/cmake/android.toolchain.cmake \
                 -DANDROID_ABI=arm64-v8a \
@@ -57,14 +57,16 @@ jobs:
                 -DTD_ENABLE_JNI=ON \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DOPENSSL_USE_STATIC_LIBS=TRUE \
-                -DOPENSSL_ROOT_DIR=${GITHUB_WORKSPACE}/android_openssl/arm64-v8a \
+                -DOPENSSL_INCLUDE_DIR=${SSL_PATH}/include \
+                -DOPENSSL_CRYPTO_LIBRARY=${SSL_PATH}/lib/libcrypto.a \
+                -DOPENSSL_SSL_LIBRARY=${SSL_PATH}/lib/libssl.a \
                 -DCMAKE_INSTALL_PREFIX:PATH=../td_install \
                 ..
 
-          # 预生成代码防止 [42/90] 报错
+          # 1. 预生成代码，解决 [42/90] 报错问题
           ninja td_generate_mime_types
           
-          # 正式编译。-j2 是 7G 内存下的黄金比例，既快又稳
+          # 2. 正式开始全量编译，使用 -j2 确保 7G 内存不溢出
           ninja -j2 install
 
       - name: 📦 上传成品 libtdjni.so
