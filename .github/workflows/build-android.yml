@@ -23,7 +23,7 @@ jobs:
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org.drinkless.tdlib/org.mommy.messenger/g' {} +
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org_drinkless_tdlib/org_mommy_messenger/g' {} +
 
-      - name: 🛠️ 自动化构建 (Docker 模式 - 增加 JDK)
+      - name: 🛠️ 自动化构建 (Docker 模式 - 补全所有协议生成器)
         run: |
           git clone https://github.com/KDAB/android_openssl.git ../android_openssl
           
@@ -31,11 +31,9 @@ jobs:
           set -e
           export DEBIAN_FRONTEND=noninteractive
           
-          # 1. 安装环境：增加了 openjdk-11-jdk 解决 JNI 缺失问题
+          # 1. 安装环境
           apt-get update
           apt-get install -y cmake gperf php-cli ninja-build clang git libssl-dev zlib1g-dev openjdk-11-jdk
-          
-          # 设置 JAVA_HOME (CMake 寻找 JNI 的关键)
           export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
           
           # 2. 定位 OpenSSL
@@ -43,13 +41,20 @@ jobs:
           SSL_PATH=$(find /android_openssl -name "libssl.a" | grep "arm64-v8a" | head -n 1)
           SSL_INC=$(dirname $(dirname $CRYPTO_PATH))/include
           
-          # 3. 第一阶段：真·代码生成 (有了 JDK 就能过 JNI 检查了)
+          # 3. 第一阶段：生成所有必要的真代码 (补齐 MTProto 和 API)
           mkdir -p build_local && cd build_local
           cmake -G Ninja -DTD_ENABLE_JNI=ON ..
-          ninja td_generate_java_api
+          # 强制运行所有协议生成器，解决 mtproto_api.h 缺失问题
+          ninja td_generate_java_api td_generate_mtproto_api td_generate_mime_types
           cd ..
 
-          # 4. 第二阶段：Android 交叉编译
+          # 4. 关键搬运：确保生成的头文件在 Android 编译器能看到的地方
+          # 将生成的 mtproto 协议头文件物理同步到源码目录
+          mkdir -p td/generate/auto/td/mtproto td/generate/auto/td/telegram tdutils/generate/auto
+          cp -rv build_local/td/generate/auto/* td/generate/auto/ || true
+          cp -rv build_local/tdutils/generate/auto/* tdutils/generate/auto/ || true
+
+          # 5. 第二阶段：Android 交叉编译
           mkdir -p build_android && cd build_android
           cmake -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK_LATEST_HOME}/build/cmake/android.toolchain.cmake \
@@ -63,6 +68,7 @@ jobs:
             -DCMAKE_INSTALL_PREFIX:PATH=/td_install \
             ..
           
+          # 正式起飞
           ninja -j2 install
           EOF
 
@@ -75,7 +81,7 @@ jobs:
             -w /work \
             ubuntu:22.04 /bin/bash build_script.sh
 
-      - name: 📦 上传真正的全功能成品
+      - name: 📦 上传全功能成品
         uses: actions/upload-artifact@v4
         with:
           name: mommy-full-real-core
