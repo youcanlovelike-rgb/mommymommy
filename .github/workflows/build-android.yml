@@ -10,7 +10,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: 🚀 增强内存与 Swap (全功能编译必须)
+      - name: 🚀 增强内存与 Swap
         run: |
           sudo swapoff -a
           sudo fallocate -l 4G /swapfile
@@ -18,37 +18,38 @@ jobs:
           sudo mkswap /swapfile
           sudo swapon /swapfile
 
-      - name: 💉 包名全局替换 (Mommy 血统注入)
+      - name: 💉 包名全局替换
         run: |
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org.drinkless.tdlib/org.mommy.messenger/g' {} +
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org_drinkless_tdlib/org_mommy_messenger/g' {} +
 
-      - name: 🛠️ 自动化构建 (Docker 强力模式)
+      - name: 🛠️ 自动化构建 (Docker 模式 - 增加 JDK)
         run: |
-          # 下载 OpenSSL
           git clone https://github.com/KDAB/android_openssl.git ../android_openssl
           
-          # 创建 Docker 内部运行的“铁律”脚本
           cat << 'EOF' > build_script.sh
           set -e
           export DEBIAN_FRONTEND=noninteractive
           
-          # 1. 极速安装环境
+          # 1. 安装环境：增加了 openjdk-11-jdk 解决 JNI 缺失问题
           apt-get update
-          apt-get install -y cmake gperf php-cli ninja-build clang git libssl-dev zlib1g-dev
+          apt-get install -y cmake gperf php-cli ninja-build clang git libssl-dev zlib1g-dev openjdk-11-jdk
           
-          # 2. 定位 OpenSSL 库 (arm64-v8a)
+          # 设置 JAVA_HOME (CMake 寻找 JNI 的关键)
+          export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+          
+          # 2. 定位 OpenSSL
           CRYPTO_PATH=$(find /android_openssl -name "libcrypto.a" | grep "arm64-v8a" | head -n 1)
           SSL_PATH=$(find /android_openssl -name "libssl.a" | grep "arm64-v8a" | head -n 1)
           SSL_INC=$(dirname $(dirname $CRYPTO_PATH))/include
           
-          # 3. 第一阶段：真·代码生成 (灵魂注入)
+          # 3. 第一阶段：真·代码生成 (有了 JDK 就能过 JNI 检查了)
           mkdir -p build_local && cd build_local
           cmake -G Ninja -DTD_ENABLE_JNI=ON ..
           ninja td_generate_java_api
           cd ..
 
-          # 4. 第二阶段：Android 交叉编译 (收割全功能成品)
+          # 4. 第二阶段：Android 交叉编译
           mkdir -p build_android && cd build_android
           cmake -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK_LATEST_HOME}/build/cmake/android.toolchain.cmake \
@@ -62,11 +63,9 @@ jobs:
             -DCMAKE_INSTALL_PREFIX:PATH=/td_install \
             ..
           
-          # 正式起飞 (-j2 稳扎稳打防止溢出)
           ninja -j2 install
           EOF
 
-          # 启动隔离容器执行
           docker run --rm \
             -v $(pwd):/work \
             -v ${GITHUB_WORKSPACE}/../android_openssl:/android_openssl \
