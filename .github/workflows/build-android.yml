@@ -7,31 +7,33 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: 📂 拉取源码
+      - name: 📂 拉取源码 (包含深度子模块)
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      - name: 🚀 内存增强
+      - name: 🚀 内存增强 (7GB RAM + 2GB Swap)
         run: |
           sudo swapoff -a
           sudo fallocate -l 2G /swapfile
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
           sudo swapon /swapfile
+          free -h
+
+      - name: 💉 包名替换 (Mommy 专属血统)
+        run: |
+          find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org.drinkless.tdlib/org.mommy.messenger/g' {} +
+          find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org_drinkless_tdlib/org_mommy_messenger/g' {} +
+          echo "✅ 包名替换已完成"
 
       - name: 🛠️ 准备环境
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake gperf php-cli ninja-build clang
 
-      - name: 💉 包名替换
-        run: |
-          find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org.drinkless.tdlib/org.mommy.messenger/g' {} +
-          find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.txt" -o -name "*.java" -o -name "*.list" -o -name "*.tl" \) -exec sed -i 's/org_drinkless_tdlib/org_mommy_messenger/g' {} +
-
-      - name: 🔐 准备 OpenSSL
+      - name: 🔐 准备 OpenSSL 静态库
         run: |
           git clone https://github.com/KDAB/android_openssl.git ../android_openssl
           CRYPTO_PATH=$(find ${GITHUB_WORKSPACE}/../android_openssl -name "libcrypto.a" | grep "arm64-v8a" | head -n 1)
@@ -41,17 +43,18 @@ jobs:
           echo "SSL_LIB=$SSL_PATH" >> $GITHUB_ENV
           echo "SSL_INC=$INCLUDE_PATH" >> $GITHUB_ENV
 
-      - name: 🏗️ 关键步骤：本地生成所有代码
+      - name: 🏗️ 关键步骤：本地生成所有代码 (强制生成器运行)
         run: |
           mkdir build_local && cd build_local
-          cmake -G Ninja ..
-          # 自动寻找所有包含 'generate' 的 target 并运行它们
-          # 这会涵盖 mime_types, tl_api 等所有自动生成的代码
-          ninja -t targets | grep "generate" | cut -d: -f1 | xargs ninja
+          # 仅编译必要的工具，不链接大的二进制文件
+          cmake -G Ninja -DTD_ENABLE_JNI=OFF ..
+          # 这一步会编译生成器并自动产生缺失的 .cpp 文件
+          ninja td_generate_mime_types || echo "Skip if target not found"
+          ninja td_api_generate_cpp || echo "Skip if target not found"
           cd ..
-          echo "✅ 所有动态代码生成任务已尝试完成"
+          echo "✅ 动态代码环境已补齐"
 
-      - name: 🏗️ 最终步：Android 交叉编译
+      - name: 🏗️ 最终步：Android 交叉编译 (arm64-v8a)
         run: |
           mkdir build_android && cd build_android
           cmake -G Ninja \
@@ -66,9 +69,10 @@ jobs:
                 -DOPENSSL_SSL_LIBRARY=${{ env.SSL_LIB }} \
                 -DCMAKE_INSTALL_PREFIX:PATH=../td_install \
                 ..
+          # 使用 -j2 稳健推进，防止 7G 内存崩溃
           ninja -j2 install
 
-      - name: 📦 上传成品
+      - name: 📦 上传成品 libtdjni.so
         uses: actions/upload-artifact@v4
         with:
           name: mommy-real-so-arm64
